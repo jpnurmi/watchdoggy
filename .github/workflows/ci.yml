@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        watchdog: [default, disabled]
+    name: ios (watchdog=${{ matrix.watchdog }})
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: 1
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - run: >-
+          dotnet tool install --global Microsoft.DotNet.XHarness.CLI
+          --add-source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-eng/nuget/v3/index.json
+          --version "11.0.0-prerelease*"
+      - run: dotnet workload restore
+      - run: dotnet build -r iossimulator-arm64
+      - name: Select simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices "iPhone 17" available -j \
+            | jq -r '.devices | to_entries[] | select(.key | test("iOS-26-0")) | .value[0].udid')
+          echo "UDID=$UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+      - name: Disable watchdogs
+        if: matrix.watchdog == 'disabled'
+        run: .github/scripts/disable-watchdogs.sh ${{ steps.sim.outputs.udid }}
+      - run: |
+          xharness apple run \
+            --app bin/Debug/net10.0-ios/iossimulator-arm64/Watchdoggy.app \
+            --target ios-simulator-64 \
+            --expected-exit-code 0 \
+            --output-directory test_output \
+            --device ${{ steps.sim.outputs.udid }} \
+            -v -v
+        timeout-minutes: 15
